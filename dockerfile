@@ -8,6 +8,6 @@ RUN mkdir -p /mnt/anwendungen
 
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
-COPY bin/Debug/netcoreapp3.1/linux-x64/publish/isci.modulbasis /usr/local/bin
+COPY bin/Debug/netcoreapp3.1/linux-x64/publish/isci.ethercatmaster /usr/local/bin
 
-ENTRYPOINT ["/usr/local/bin/isci.modulbasis"]
+ENTRYPOINT ["/usr/local/bin/isci.ethercatmaster"]
