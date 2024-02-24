@@ -2,13 +2,17 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <TargetFramework>netcoreapp8.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\isci\isci.csproj" />
-    <ProjectReference Include="..\EtherCAT.NET/src/EtherCAT.NET\EtherCAT.NET.csproj" />
+    
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="C:\Users\DBB\Desktop\git\EtherCAT.NET\src\EtherCAT.NET\EtherCAT.NET.csproj" />
+  </ItemGroup>
 </Project>
+ 

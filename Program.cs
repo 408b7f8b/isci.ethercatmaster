@@ -11,11 +11,13 @@ namespace isci.ethercatmaster
 {
     public class Konfiguration : Parameter
     {
-        public string interfaceName;            
+        [fromArgs, fromEnv]
+        public string interfaceName;
+        [fromArgs, fromEnv]
         public string pfadESI;
-        public Konfiguration(string datei) : base(datei) {
-            var localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            pfadESI = System.IO.Path.Combine(localAppDataPath, "ESI");
+        public Konfiguration(string[] args) : base(args) {
+            /* var localAppDataPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            pfadESI = System.IO.Path.Combine(localAppDataPath, "ESI"); */
 
             isci.Helfer.OrdnerPruefenErstellen(pfadESI);
         }
@@ -23,11 +25,19 @@ namespace isci.ethercatmaster
 
     class Program
     {
+        static EtherCAT.NET.EcMaster master;
+
+        static void UpdateIO(object state)
+        {
+            master.UpdateIO(DateTime.Now);
+        }
+
         static void Main(string[] args)
         {
-            var konfiguration = new Konfiguration("konfiguration.json");
+            var konfiguration = new Konfiguration(args);
             
-            var structure = new Datenstruktur(konfiguration.OrdnerDatenstruktur);
+            var structure = new Datenstruktur(konfiguration);
+            var ausfuehrungsmodell = new Ausführungsmodell(konfiguration, structure.Zustand);
 
             var dm = new Datenmodell(konfiguration.Identifikation);
 
@@ -36,7 +46,6 @@ namespace isci.ethercatmaster
             /* scan available slaves */
             var rootSlave = EtherCAT.NET.EcUtilities.ScanDevices(settings.InterfaceName);
 
-            var message = new System.Text.StringBuilder();
             var slaves = rootSlave.Descendants().ToList();
 
             slaves.ForEach(slave => 
@@ -44,12 +53,27 @@ namespace isci.ethercatmaster
                 EtherCAT.NET.EcUtilities.CreateDynamicData(settings.EsiDirectoryPath, slave);
             });
 
-            message.AppendLine($"Found {slaves.Count()} slaves:");
+            Console.WriteLine($"Found {slaves.Count()} slaves:");
 
             foreach (var slave in slaves)
             {
-                message.AppendLine($"{slave.DynamicData.Name} (PDOs: {slave.DynamicData.Pdos.Count} - CSA: {slave.Csa})");
+                Console.WriteLine($"{slave.DynamicData.Name} (PDOs: {slave.DynamicData.Pdos.Count} - CSA: {slave.Csa})");
             }
+
+            master = new EtherCAT.NET.EcMaster(settings);
+
+            settings.TargetTimeDifference = 1000; //in Nanosekunden
+            
+            try
+            {
+                master.Configure(rootSlave);
+            }
+            catch (Exception ex)
+            {
+                throw;
+            }
+
+            master.UpdateIO(DateTime.UtcNow);
 
             var variables = slaves.SelectMany(child => child.GetVariables()).ToList();
 
@@ -61,8 +85,14 @@ namespace isci.ethercatmaster
                     {
                         case EtherCAT.NET.Infrastructure.EthercatDataType.Boolean:
                         {
+                            var zugeordneterSlaveCsa = variable.Parent.Parent.Csa;
+                            var zugeordneterSlave = slaves.FirstOrDefault(current => current.Csa == zugeordneterSlaveCsa);
+                            var zugeordneterSlaveIndex = slaves.IndexOf(zugeordneterSlave);
+
+                            var wert = new Span<bool>(variable.DataPtr.ToPointer(), 1);
+
                             
-                            var eintrag = new dtBool((new Span<bool>(variable.DataPtr.ToPointer(), 1))[0], variable.Name);
+                            var eintrag = new dtBool(wert[0], "Slave" + zugeordneterSlaveIndex + "_" + zugeordneterSlave.DynamicData.Name + "_" + variable.Parent.Name.Replace(" ", "") + "_" + variable.Name);
                             dm.Dateneinträge.Add(eintrag);
 
                             break;
@@ -82,42 +112,44 @@ namespace isci.ethercatmaster
             structure.DatenmodelleEinhängenAusOrdner(konfiguration.OrdnerDatenmodelle);
             structure.Start();
 
-            var Zustand = new dtZustand(konfiguration.OrdnerDatenstruktur);
-            Zustand.Start();
+            var timer = new System.Threading.Timer(UpdateIO, null, 0, 50);
 
-            var master = new EtherCAT.NET.EcMaster(settings);
             
-            try
-            {
-                master.Configure(rootSlave);
-            }
-            catch (Exception ex)
-            {
-                throw;
-            }
             
             while(true)
             {
-                Zustand.Lesen();
+                structure.Zustand.WertAusSpeicherLesen();
 
-                var erfüllteTransitionen = konfiguration.Ausführungstransitionen.Where(a => a.Eingangszustand == (System.Int32)Zustand.value);
-                if (erfüllteTransitionen.Count<Ausführungstransition>() <= 0) continue;
-
-                master.UpdateIO(DateTime.UtcNow);
-
-                unsafe
+                if (ausfuehrungsmodell.AktuellerZustandModulAktivieren())
                 {
-                    if (variables.Any())
+                    var zustandParameter = ausfuehrungsmodell.ParameterAktuellerZustand();
+
+                    switch (zustandParameter)
                     {
-                        //var myVariableSpan = new Span<int>(variables.First().DataPtr.ToPointer(), 1);
-                        //myVariableSpan[0] = random.Next(0, 100);
+                        case "E":
+                        {
+                            unsafe
+                            {
+                                if (variables.Any())
+                                {
+                                    //var myVariableSpan = new Span<int>(variables.First().DataPtr.ToPointer(), 1);
+                                    //myVariableSpan[0] = random.Next(0, 100);
+                                }
+                            }
+                            break;
+                        }
+                        case "A":
+                        {
+                            break;
+                        }
                     }
+
+                    ausfuehrungsmodell.Folgezustand();
+                    structure.Zustand.WertInSpeicherSchreiben();
                 }
 
-                structure.Schreiben();
-
-                Zustand.value = erfüllteTransitionen.First<Ausführungstransition>().Ausgangszustand;
-                Zustand.Schreiben();
+                //isci.Helfer.SleepForMicroseconds(konfiguration.PauseArbeitsschleifeUs);
+                System.Threading.Thread.Sleep(1);
             }
         }
     }
